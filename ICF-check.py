@@ -7,7 +7,7 @@ from io import BytesIO
 st.set_page_config(page_title="ICF Consent Report Generator", layout="centered")
 
 st.title("📄 ICF Consent Report Generator")
-st.write("Lade die drei benötigten Excel-Dateien per Drag & Drop hoch.")
+st.write("Lade die benötigten Excel-Dateien per Drag & Drop hoch.")
 
 # --------------------------
 # Upload-Felder
@@ -16,6 +16,7 @@ st.write("Lade die drei benötigten Excel-Dateien per Drag & Drop hoch.")
 icf_file = st.file_uploader("ICF-Datei (mit Sheet 'ICF2')", type=["xlsx", "xls"])
 consent_file = st.file_uploader("Consent-Daten", type=["xlsx", "xls"])
 eos_file = st.file_uploader("EOS-Daten", type=["xlsx", "xls"])
+elig_file = st.file_uploader("Eligibility-Datei (für Screening Failure)", type=["xlsx", "xls"])
 
 # --------------------------
 # Hilfsfunktionen
@@ -62,6 +63,13 @@ def load_eos(file):
     return df
 
 
+def load_elig(file):
+    df = pd.read_excel(file, dtype={"mnpaid": str})
+    df["mnpaid"] = df["mnpaid"].astype(str)
+    df["eligyn"] = df["eligyn"].astype(str)
+    return df
+
+
 def find_icf_version(icf_df, date):
     if pd.isna(date):
         return None
@@ -85,17 +93,19 @@ def find_icf_version(icf_df, date):
 # Report Generator
 # --------------------------
 
-def generate_report(icf_df, consents_df, eos_df):
+def generate_report(icf_df, consents_df, eos_df, elig_df):
+
     eos_map = eos_df.set_index("mnpaid")["eosdat"].to_dict()
     dth_map = eos_df.set_index("mnpaid")["dthdat"].to_dict()
+    elig_map = elig_df.set_index("mnpaid")["eligyn"].to_dict()
 
     rows = []
 
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
 
-        eos_date = eos_map.get(pid, pd.NaT)
-        dth_date = dth_map.get(pid, pd.NaT)
+        # Eligibility check
+        elig = elig_map.get(pid, "Yes")
 
         # Randomisierung
         first_row = group.iloc[0]
@@ -104,6 +114,9 @@ def generate_report(icf_df, consents_df, eos_df):
         rando_text = f"{r1} / {r2}"
 
         # EOS / Death
+        eos_date = eos_map.get(pid, pd.NaT)
+        dth_date = dth_map.get(pid, pd.NaT)
+
         if not pd.isna(dth_date):
             eos_text = f"EOS (Death, {dth_date.strftime('%d.%m.%Y')})"
         elif not pd.isna(eos_date):
@@ -111,9 +124,30 @@ def generate_report(icf_df, consents_df, eos_df):
         else:
             eos_text = ""
 
+        # Screening Failure?
+        if elig.strip().lower() == "no":
+            comment_block = "\n".join([rando_text, "Screening Failure"])
+
+            # Patient signed exactly ONE version → report ONLY that version
+            for _, rec in group.iterrows():
+                icdate = rec["icdat"]
+                version = find_icf_version(icf_df, icdate)
+
+                if version:
+                    rows.append({
+                        "Patient-ID": pid,
+                        "Version": version,
+                        "Date": icdate.strftime("%Y-%m-%d"),
+                        "Comment": comment_block
+                    })
+
+            # Skip all other versions
+            continue
+
+        # Normal flow for eligible patients
         comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
 
-        # Map patient signed consents by version
+        # Determine which versions were signed
         signed_versions = {}
         for _, rec in group.iterrows():
             icdate = rec["icdat"]
@@ -121,15 +155,13 @@ def generate_report(icf_df, consents_df, eos_df):
             if version:
                 signed_versions[version] = icdate.strftime("%Y-%m-%d")
 
-        # Last consent the patient actually signed
         last_consent = group["icdat"].max()
 
-        # Now list ALL versions
+        # List *all* ICF versions
         for _, icf_row in icf_df.iterrows():
             version = icf_row["ICF Version"]
             valid_from = icf_row["Gültig ab"]
 
-            # Case 1: Patient actually signed this version
             if version in signed_versions:
                 rows.append({
                     "Patient-ID": pid,
@@ -139,7 +171,7 @@ def generate_report(icf_df, consents_df, eos_df):
                 })
                 continue
 
-            # Case 2: Should have signed because version became valid during participation → CHECK
+            # Should have reconsented
             if valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
                 rows.append({
                     "Patient-ID": pid,
@@ -149,7 +181,7 @@ def generate_report(icf_df, consents_df, eos_df):
                 })
                 continue
 
-            # Case 3: Patient was not in study anymore → n.a.
+            # Otherwise not applicable
             rows.append({
                 "Patient-ID": pid,
                 "Version": version,
@@ -180,18 +212,20 @@ def generate_report(icf_df, consents_df, eos_df):
     bio.seek(0)
     return bio
 
+
 # --------------------------
 # Button → Report generieren
 # --------------------------
 
-if icf_file and consent_file and eos_file:
+if icf_file and consent_file and eos_file and elig_file:
     if st.button("📄 Report generieren"):
         with st.spinner("Erstelle Word-Datei..."):
             icf_df = load_icf_versions(icf_file)
             consents_df = load_consents(consent_file)
             eos_df = load_eos(eos_file)
+            elig_df = load_elig(elig_file)
 
-            word_file = generate_report(icf_df, consents_df, eos_df)
+            word_file = generate_report(icf_df, consents_df, eos_df, elig_df)
 
         st.success("Fertig!")
         st.download_button(
@@ -201,4 +235,4 @@ if icf_file and consent_file and eos_file:
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 else:
-    st.info("Bitte zuerst alle drei Dateien hochladen.")
+    st.info("Bitte zuerst alle vier Dateien hochladen.")
