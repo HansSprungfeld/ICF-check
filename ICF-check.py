@@ -26,7 +26,6 @@ def load_icf_versions(file):
     sheet = "ICF2" if "ICF2" in xls.sheet_names else xls.sheet_names[0]
     df = pd.read_excel(xls, sheet_name=sheet)
 
-    # Spalten normalisieren
     col_map = {}
     for c in df.columns:
         lc = c.lower()
@@ -36,7 +35,6 @@ def load_icf_versions(file):
             col_map[c] = "Gültig ab"
 
     df = df.rename(columns=col_map)
-
     df["Gültig ab"] = pd.to_datetime(df["Gültig ab"], errors="coerce")
     df = df.sort_values("Gültig ab").reset_index(drop=True)
 
@@ -45,21 +43,15 @@ def load_icf_versions(file):
 
 def load_consents(file):
     df = pd.read_excel(file, dtype={"mnpaid": str})
-
-    # Normalize patient ID
     df["mnpaid"] = df["mnpaid"].astype(str)
-
-    # Parse date
     df["icdat"] = pd.to_datetime(df["icdat"], errors="coerce")
 
-    # Ensure randomization columns exist
     if "mnp_rando_gr" not in df.columns:
         df["mnp_rando_gr"] = ""
     if "mnp_rando_v6_gr" not in df.columns:
         df["mnp_rando_v6_gr"] = ""
 
     return df
-
 
 
 def load_eos(file):
@@ -88,19 +80,34 @@ def find_icf_version(icf_df, date):
     return None
 
 
+# --------------------------
+# Report Generator
+# --------------------------
+
 def generate_report(icf_df, consents_df, eos_df):
     eos_map = eos_df.set_index("mnpaid")["eosdat"].to_dict()
     rows = []
 
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
-        eos = eos_map.get(pid, pd.NaT)
+        eos_date = eos_map.get(pid, pd.NaT)
 
-        # Jede Consentzeile aufnehmen
+        # Basis-Kommentartext vorbereiten
+        first_row = group.iloc[0]
+        r1 = first_row.get("mnp_rando_gr", "") or "-"
+        r2 = first_row.get("mnp_rando_v6_gr", "") or "-"
+        rando_text = f"{r1} / {r2}"
+
+        # EOS-Text hinzufügen (falls vorhanden)
+        eos_text = ""
+        if not pd.isna(eos_date):
+            eos_text = f"EOS ({eos_date.strftime('%d.%m.%Y')})"
+
+        # Beide Kommentare kombinieren
+        comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
+
+        # Jede Consent-Zeile einfügen
         for _, rec in group.iterrows():
-            rando = rec.get("mnp_rando_gr", "")
-            rando2 = rec.get("mnp_rando_v6_gr", "")
-            rando_text = f"{rando or '-'} / {rando2 or '-'}"
             icdate = rec["icdat"]
             version = find_icf_version(icf_df, icdate)
 
@@ -108,7 +115,7 @@ def generate_report(icf_df, consents_df, eos_df):
                 "Patient-ID": pid,
                 "Version": version or "",
                 "Date": icdate.strftime("%Y-%m-%d") if not pd.isna(icdate) else "",
-                "Comment": rando_text
+                "Comment": comment_block
             })
 
         # Re-consent Logik
@@ -118,7 +125,7 @@ def generate_report(icf_df, consents_df, eos_df):
             v_name = icf_row["ICF Version"]
             v_valid = icf_row["Gültig ab"]
 
-            if v_valid > last_consent and (pd.isna(eos) or eos >= v_valid):
+            if v_valid > last_consent and (pd.isna(eos_date) or eos_date >= v_valid):
                 already_signed = any(group["icdat"] >= v_valid)
 
                 if not already_signed:
@@ -126,7 +133,7 @@ def generate_report(icf_df, consents_df, eos_df):
                         "Patient-ID": pid,
                         "Version": v_name,
                         "Date": "CHECK",
-                        "Comment": rando_text
+                        "Comment": comment_block
                     })
 
     # Word-Dokument erstellen
