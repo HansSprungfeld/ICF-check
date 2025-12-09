@@ -57,6 +57,7 @@ def load_consents(file):
 def load_eos(file):
     df = pd.read_excel(file, dtype={"mnpaid": str})
     df["eosdat"] = pd.to_datetime(df["eosdat"], errors="coerce")
+    df["dthdat"] = pd.to_datetime(df.get("dthdat"), errors="coerce")
     df["mnpaid"] = df["mnpaid"].astype(str)
     return df
 
@@ -91,6 +92,8 @@ def generate_report(icf_df, consents_df, eos_df):
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
         eos_date = eos_map.get(pid, pd.NaT)
+        dth_date = eos_df.set_index("mnpaid")["dthdat"].to_dict().get(pid, pd.NaT)
+       
 
         # Basis-Kommentartext vorbereiten
         first_row = group.iloc[0]
@@ -99,10 +102,13 @@ def generate_report(icf_df, consents_df, eos_df):
         rando_text = f"{r1} / {r2}"
 
         # EOS-Text hinzufügen (falls vorhanden)
-        eos_text = ""
-        if not pd.isna(eos_date):
+        if not pd.isna(dth_date):
+            eos_text = f"EOS (Death, {dth_date.strftime('%d.%m.%Y')})"
+        elif not pd.isna(eos_date):
             eos_text = f"EOS ({eos_date.strftime('%d.%m.%Y')})"
-
+        else:
+            eos_text = ""
+       
         # Beide Kommentare kombinieren
         comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
 
