@@ -13,10 +13,10 @@ st.write("Lade die benötigten Excel-Dateien per Drag & Drop hoch.")
 # Upload-Felder
 # --------------------------
 
-icf_file = st.file_uploader("ICF-Datei (mit Sheet 'ICF2')", type=["xlsx", "xls"])
+icf_file = st.file_uploader("ICF-Versionen (xlsx Tabelle mit einem Sheet 'ICF2')", type=["xlsx", "xls"])
 consent_file = st.file_uploader("Consent-Daten", type=["xlsx", "xls"])
 eos_file = st.file_uploader("EOS-Daten", type=["xlsx", "xls"])
-elig_file = st.file_uploader("Eligibility-Datei (für Screening Failure)", type=["xlsx", "xls"])
+elig_file = st.file_uploader("Eligibility-Datei (inclusion/exclusion Daten, für Screening Failure)", type=["xlsx", "xls"])
 
 # --------------------------
 # Hilfsfunktionen
