@@ -104,8 +104,7 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
 
-        # Eligibility check
-        elig = elig_map.get(pid, "Yes")
+        elig = elig_map.get(pid, "Yes").strip().lower()
 
         # Randomisierung
         first_row = group.iloc[0]
@@ -124,30 +123,7 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
         else:
             eos_text = ""
 
-        # Screening Failure?
-        if elig.strip().lower() == "no":
-            comment_block = "\n".join([rando_text, "Screening Failure"])
-
-            # Patient signed exactly ONE version → report ONLY that version
-            for _, rec in group.iterrows():
-                icdate = rec["icdat"]
-                version = find_icf_version(icf_df, icdate)
-
-                if version:
-                    rows.append({
-                        "Patient-ID": pid,
-                        "Version": version,
-                        "Date": icdate.strftime("%Y-%m-%d"),
-                        "Comment": comment_block
-                    })
-
-            # Skip all other versions
-            continue
-
-        # Normal flow for eligible patients
-        comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
-
-        # Determine which versions were signed
+        # Determine signed versions
         signed_versions = {}
         for _, rec in group.iterrows():
             icdate = rec["icdat"]
@@ -157,7 +133,38 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
 
         last_consent = group["icdat"].max()
 
-        # List *all* ICF versions
+        # ----------------------------------
+        # SCREENING FAILURE LOGIK
+        # ----------------------------------
+        if elig == "no":
+
+            # Comment: ONLY "Screening Failure"
+            comment_block = "Screening Failure"
+
+            # List ALL versions for screening failures (your new requirement)
+            for _, icf_row in icf_df.iterrows():
+                version = icf_row["ICF Version"]
+
+                if version in signed_versions:
+                    date_val = signed_versions[version]
+                else:
+                    date_val = "n.a."
+
+                rows.append({
+                    "Patient-ID": pid,
+                    "Version": version,
+                    "Date": date_val,
+                    "Comment": comment_block
+                })
+
+            continue
+
+        # ----------------------------------
+        # NORMAL PATIENT FLOW
+        # ----------------------------------
+
+        comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
+
         for _, icf_row in icf_df.iterrows():
             version = icf_row["ICF Version"]
             valid_from = icf_row["Gültig ab"]
@@ -171,7 +178,6 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
                 })
                 continue
 
-            # Should have reconsented
             if valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
                 rows.append({
                     "Patient-ID": pid,
@@ -181,7 +187,6 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
                 })
                 continue
 
-            # Otherwise not applicable
             rows.append({
                 "Patient-ID": pid,
                 "Version": version,
