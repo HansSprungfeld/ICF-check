@@ -45,9 +45,21 @@ def load_icf_versions(file):
 
 def load_consents(file):
     df = pd.read_excel(file, dtype={"mnpaid": str})
-    df["icdat"] = pd.to_datetime(df["icdat"], errors="coerce")
+
+    # Normalize patient ID
     df["mnpaid"] = df["mnpaid"].astype(str)
+
+    # Parse date
+    df["icdat"] = pd.to_datetime(df["icdat"], errors="coerce")
+
+    # Ensure randomization columns exist
+    if "mnp_rando_gr" not in df.columns:
+        df["mnp_rando_gr"] = ""
+    if "mnp_rando_v6_gr" not in df.columns:
+        df["mnp_rando_v6_gr"] = ""
+
     return df
+
 
 
 def load_eos(file):
@@ -86,6 +98,9 @@ def generate_report(icf_df, consents_df, eos_df):
 
         # Jede Consentzeile aufnehmen
         for _, rec in group.iterrows():
+            rando = rec.get("mnp_rando_gr", "")
+            rando2 = rec.get("mnp_rando_v6_gr", "")
+            rando_text = f"Randomization group: {rando or '-'} / {rando2 or '-'}"
             icdate = rec["icdat"]
             version = find_icf_version(icf_df, icdate)
 
@@ -93,7 +108,7 @@ def generate_report(icf_df, consents_df, eos_df):
                 "Patient-ID": pid,
                 "Version": version or "",
                 "Date": icdate.strftime("%Y-%m-%d") if not pd.isna(icdate) else "",
-                "Comment": ""
+                "Comment": rando_text
             })
 
         # Re-consent Logik
