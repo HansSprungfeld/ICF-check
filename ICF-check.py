@@ -125,8 +125,8 @@ def generate_report(icf_df, consents_df, eos_df):
                     rows.append({
                         "Patient-ID": pid,
                         "Version": v_name,
-                        "Date": "",
-                        "Comment": f"Re-consent required (ICF valid from {v_valid.date()})"
+                        "Date": "CHECK",
+                        "Comment": rando_text
                     })
 
     # Word-Dokument erstellen
