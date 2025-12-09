@@ -88,37 +88,6 @@ def find_icf_version(icf_df, date):
 
     return None
 
-def merge_patient_rows(table, pat_id_col=0, comment_col=-1):
-    """
-    table: python-docx table object
-    pat_id_col: index der Spalte mit der Patienten-ID
-    comment_col: index der Kommentarspalte (standard: letzte Spalte)
-    """
-
-    # Alle Zeilen der Tabelle durchgehen (erste ist Header → überspringen)
-    current_start = 1
-    current_pat = table.cell(1, pat_id_col).text
-
-    for i in range(2, len(table.rows)):
-        pat_here = table.cell(i, pat_id_col).text
-
-        if pat_here != current_pat:
-            # Block abschließen
-            if i - 1 > current_start:
-                # Pat-ID Spalte mergen
-                table.cell(current_start, pat_id_col).merge(table.cell(i - 1, pat_id_col))
-                # Kommentarspalte mergen
-                table.cell(current_start, comment_col).merge(table.cell(i - 1, comment_col))
-
-            # neuen Block beginnen
-            current_pat = pat_here
-            current_start = i
-
-    # letzten Block am Ende mergen
-    last_row = len(table.rows) - 1
-    if last_row > current_start:
-        table.cell(current_start, pat_id_col).merge(table.cell(last_row, pat_id_col))
-        table.cell(current_start, comment_col).merge(table.cell(last_row, comment_col))
 
 
 # --------------------------
@@ -244,10 +213,37 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
         row_cells[2].text = r["Date"]
         row_cells[3].text = r["Comment"]
 
+
+    # --- Merge cells for Patient-ID and Comment ---
+    # We find row ranges with identical Patient-ID
+    table_rows = table.rows[1:]  # skip header
+    n_rows = len(table_rows)
+    start = 0
+
+    while start < n_rows:
+        current_pid = table_rows[start].cells[0].text
+        end = start + 1
+
+        # find consecutive rows with same Patient-ID
+        while end < n_rows and table_rows[end].cells[0].text == current_pid:
+            end += 1
+
+        # merge Patient-ID column
+        if end - start > 1:
+            merge_range = table_rows[start].cells[0].merge(table_rows[end-1].cells[0])
+            merge_range.text = current_pid  # ensure clean text
+
+            # merge Comment column
+            comment_text = table_rows[start].cells[3].text
+            merge_comment = table_rows[start].cells[3].merge(table_rows[end-1].cells[3])
+            merge_comment.text = comment_text
+
+        start = end
+
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)
-    merge_patient_rows(table)
+    
 
     return bio
 
