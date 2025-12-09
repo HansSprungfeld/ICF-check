@@ -88,6 +88,38 @@ def find_icf_version(icf_df, date):
 
     return None
 
+def merge_patient_rows(table, pat_id_col=0, comment_col=-1):
+    """
+    table: python-docx table object
+    pat_id_col: index der Spalte mit der Patienten-ID
+    comment_col: index der Kommentarspalte (standard: letzte Spalte)
+    """
+
+    # Alle Zeilen der Tabelle durchgehen (erste ist Header → überspringen)
+    current_start = 1
+    current_pat = table.cell(1, pat_id_col).text
+
+    for i in range(2, len(table.rows)):
+        pat_here = table.cell(i, pat_id_col).text
+
+        if pat_here != current_pat:
+            # Block abschließen
+            if i - 1 > current_start:
+                # Pat-ID Spalte mergen
+                table.cell(current_start, pat_id_col).merge(table.cell(i - 1, pat_id_col))
+                # Kommentarspalte mergen
+                table.cell(current_start, comment_col).merge(table.cell(i - 1, comment_col))
+
+            # neuen Block beginnen
+            current_pat = pat_here
+            current_start = i
+
+    # letzten Block am Ende mergen
+    last_row = len(table.rows) - 1
+    if last_row > current_start:
+        table.cell(current_start, pat_id_col).merge(table.cell(last_row, pat_id_col))
+        table.cell(current_start, comment_col).merge(table.cell(last_row, comment_col))
+
 
 # --------------------------
 # Report Generator
@@ -215,6 +247,8 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)
+    merge_patient_rows(table)
+
     return bio
 
 
