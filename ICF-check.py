@@ -87,62 +87,77 @@ def find_icf_version(icf_df, date):
 
 def generate_report(icf_df, consents_df, eos_df):
     eos_map = eos_df.set_index("mnpaid")["eosdat"].to_dict()
+    dth_map = eos_df.set_index("mnpaid")["dthdat"].to_dict()
+
     rows = []
 
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
-        eos_date = eos_map.get(pid, pd.NaT)
-        dth_date = eos_df.set_index("mnpaid")["dthdat"].to_dict().get(pid, pd.NaT)
-       
 
-        # Basis-Kommentartext vorbereiten
+        eos_date = eos_map.get(pid, pd.NaT)
+        dth_date = dth_map.get(pid, pd.NaT)
+
+        # Randomisierung
         first_row = group.iloc[0]
         r1 = first_row.get("mnp_rando_gr", "") or "-"
         r2 = first_row.get("mnp_rando_v6_gr", "") or "-"
         rando_text = f"{r1} / {r2}"
 
-        # EOS-Text hinzufügen (falls vorhanden)
+        # EOS / Death
         if not pd.isna(dth_date):
             eos_text = f"EOS (Death, {dth_date.strftime('%d.%m.%Y')})"
         elif not pd.isna(eos_date):
             eos_text = f"EOS ({eos_date.strftime('%d.%m.%Y')})"
         else:
             eos_text = ""
-       
-        # Beide Kommentare kombinieren
+
         comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
 
-        # Jede Consent-Zeile einfügen
+        # Map patient signed consents by version
+        signed_versions = {}
         for _, rec in group.iterrows():
             icdate = rec["icdat"]
             version = find_icf_version(icf_df, icdate)
+            if version:
+                signed_versions[version] = icdate.strftime("%Y-%m-%d")
 
+        # Last consent the patient actually signed
+        last_consent = group["icdat"].max()
+
+        # Now list ALL versions
+        for _, icf_row in icf_df.iterrows():
+            version = icf_row["ICF Version"]
+            valid_from = icf_row["Gültig ab"]
+
+            # Case 1: Patient actually signed this version
+            if version in signed_versions:
+                rows.append({
+                    "Patient-ID": pid,
+                    "Version": version,
+                    "Date": signed_versions[version],
+                    "Comment": comment_block
+                })
+                continue
+
+            # Case 2: Should have signed because version became valid during participation → CHECK
+            if valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
+                rows.append({
+                    "Patient-ID": pid,
+                    "Version": version,
+                    "Date": "CHECK",
+                    "Comment": comment_block
+                })
+                continue
+
+            # Case 3: Patient was not in study anymore → n.a.
             rows.append({
                 "Patient-ID": pid,
-                "Version": version or "",
-                "Date": icdate.strftime("%Y-%m-%d") if not pd.isna(icdate) else "",
+                "Version": version,
+                "Date": "n.a.",
                 "Comment": comment_block
             })
 
-        # Re-consent Logik
-        last_consent = group["icdat"].max()
-
-        for _, icf_row in icf_df.iterrows():
-            v_name = icf_row["ICF Version"]
-            v_valid = icf_row["Gültig ab"]
-
-            if v_valid > last_consent and (pd.isna(eos_date) or eos_date >= v_valid):
-                already_signed = any(group["icdat"] >= v_valid)
-
-                if not already_signed:
-                    rows.append({
-                        "Patient-ID": pid,
-                        "Version": v_name,
-                        "Date": "CHECK",
-                        "Comment": comment_block
-                    })
-
-    # Word-Dokument erstellen
+    # Word output
     doc = Document()
     doc.add_heading("Consent Report", level=1)
 
