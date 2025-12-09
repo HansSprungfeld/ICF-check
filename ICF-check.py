@@ -100,7 +100,7 @@ def generate_report(icf_df, consents_df, eos_df):
         for _, rec in group.iterrows():
             rando = rec.get("mnp_rando_gr", "")
             rando2 = rec.get("mnp_rando_v6_gr", "")
-            rando_text = f"Randomization group: {rando or '-'} / {rando2 or '-'}"
+            rando_text = f"{rando or '-'} / {rando2 or '-'}"
             icdate = rec["icdat"]
             version = find_icf_version(icf_df, icdate)
 
