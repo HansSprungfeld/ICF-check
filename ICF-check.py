@@ -107,17 +107,23 @@ def load_elig(file):
 # Core Logic
 # ==========================
 
-def find_icf_version(icf_df, date):
+def find_all_icf_versions(icf_df, date):
     if pd.isna(date):
-        return None
-    for i, row in icf_df.iterrows():
-        start = row["Gültig ab"]
-        end = icf_df.iloc[i + 1]["Gültig ab"] if i + 1 < len(icf_df) else None
-        if end is None and date >= start:
-            return row["ICF Version"]
-        if start <= date < end:
-            return row["ICF Version"]
-    return None
+        return []
+
+    rows = icf_df.sort_values("Gültig ab").reset_index(drop=True)
+
+    valid_rows = rows[rows["Gültig ab"] <= date]
+
+    if valid_rows.empty:
+        return []
+
+    # IMPORTANT:
+    # only versions with the SAME "gültig ab" as the latest applicable date
+    latest_valid_date = valid_rows["Gültig ab"].max()
+
+    return valid_rows[valid_rows["Gültig ab"] == latest_valid_date]["ICF Version"].tolist()
+
 
 def generate_report(icf_df, consents_df, eos_df, elig_df):
     eos_map = eos_df.set_index("mnpaid").get("eosdat", {}).to_dict()
@@ -143,11 +149,14 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
         elif pd.notna(eos_date):
             eos_text = f"EOS ({eos_date.strftime('%d.%m.%Y')})"
 
-        signed = {}
-        for _, r in group.iterrows():
-            v = find_icf_version(icf_df, r["icdat"])
-            if v:
-                signed[v] = r["icdat"].strftime("%Y-%m-%d")
+        signed_versions = {}
+        for _, rec in group.iterrows():
+            icdate = rec["icdat"]
+        
+            versions = find_all_icf_versions(icf_df, icdate)
+        
+            for version in versions:
+                signed_versions[version] = icdate.strftime("%Y-%m-%d")
 
         comment = "Screening Failure" if elig == "no" else "\n".join(filter(None, [rando_text, eos_text]))
         last_consent = group["icdat"].max()
