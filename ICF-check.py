@@ -187,19 +187,48 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
         row[2].text = r["Date"]
         row[3].text = r["Comment"]
 
-    # Merge cells
-    tr = table.rows[1:]
-    i = 0
-    while i < len(tr):
-        pid = tr[i].cells[0].text
-        j = i + 1
-        while j < len(tr) and tr[j].cells[0].text == pid:
-            j += 1
-        if j - i > 1:
-            tr[i].cells[0].merge(tr[j - 1].cells[0])
-            tr[i].cells[3].merge(tr[j - 1].cells[3])
-        i = j
+    # --- Merge cells for Patient-ID and Comment ---
+    table_rows = table.rows[1:]  # skip header
+    n_rows = len(table_rows)
+    start = 0
+    
+    while start < n_rows:
+        current_pid = table_rows[start].cells[0].text
+        end = start + 1
+    
+        while end < n_rows and table_rows[end].cells[0].text == current_pid:
+            end += 1
+    
+        if end - start > 1:
+    
+            # -------- Patient-ID --------
+            pid_text = table_rows[start].cells[0].text
+    
+            # clear text in all involved cells
+            for i in range(start, end):
+                table_rows[i].cells[0].text = ""
+    
+            merged_pid = table_rows[start].cells[0].merge(
+                table_rows[end - 1].cells[0]
+            )
+            merged_pid.text = pid_text
+    
+            # -------- Comment --------
+            comment_text = table_rows[start].cells[3].text
+    
+            for i in range(start, end):
+                table_rows[i].cells[3].text = ""
+    
+            merged_comment = table_rows[start].cells[3].merge(
+                table_rows[end - 1].cells[3]
+            )
+            merged_comment.text = comment_text
+    
+        start = end
 
+
+
+    
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)
