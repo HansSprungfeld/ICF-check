@@ -165,8 +165,8 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
             v = icf["ICF Version"]
             valid_from = icf["Gültig ab"]
 
-            if v in signed:
-                date = signed[v]
+            if v in signed_versions:
+                date = signed_versions[v]
             elif elig != "no" and valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
                 date = "CHECK"
             else:
