@@ -186,7 +186,7 @@ def generate_report(icf_df, consents_df, eos_df, elig_df):
     hdr[0].text = "Patient-ID"
     hdr[1].text = "Version of Informed Consent Form"
     hdr[2].text = "Date of Consent"
-    hdr[3].text = "Comment"
+    hdr[3].text = "Comment (e.g. issues/findings noted, Screening Failure, reason for EOS, TR participation etc.)"
 
 
     for r in rows:
