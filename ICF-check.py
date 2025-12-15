@@ -1,273 +1,228 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from docx import Document
 from io import BytesIO
+
+# ==========================
+# Streamlit Setup
+# ==========================
 
 st.set_page_config(page_title="ICF Consent Report Generator", layout="centered")
 
 st.title("📄 ICF Consent Report Generator")
-st.write("Lade die benötigten Excel-Dateien per Drag & Drop hoch.")
+st.write("Studie auswählen und benötigte Excel-Dateien per Drag & Drop hochladen.")
 
-# --------------------------
-# Upload-Felder
-# --------------------------
+# ==========================
+# Mapping laden (lokal)
+# ==========================
 
-icf_file = st.file_uploader("ICF-Versionen (xlsx Tabelle mit einem Sheet 'ICF2')", type=["xlsx", "xls"])
-consent_file = st.file_uploader("icf-xlsx: Consent-Daten", type=["xlsx", "xls"])
-eos_file = st.file_uploader("eos-xlsx - EOS-Daten", type=["xlsx", "xls"])
-elig_file = st.file_uploader("Eligibility-Datei (inclusion/exclusion-xlsx, für Screening Failure)", type=["xlsx", "xls"])
+MAPPING_FILE = "study_mapping.xlsx"
 
-# --------------------------
-# Hilfsfunktionen
-# --------------------------
+MEANING_TO_INTERNAL = {
+    "patientenid": "mnpaid",
+    "icf datum unterschrift": "icdat",
+    "eos datum": "eosdat",
+    "todesdatum": "dthdat",
+    "patient eligible": "eligyn",
+    "randomisierungsgruppe": "mnp_rando_gr",
+    "randomisierungsgruppe2": "mnp_rando_v6_gr"
+}
+
+@st.cache_data
+def load_study_mapping():
+    df = pd.read_excel(MAPPING_FILE)
+    df = df[~df.iloc[:, 0].str.lower().eq("xlsx")]
+    return df
+
+mapping_df = load_study_mapping()
+available_studies = list(mapping_df.columns[1:])
+
+selected_study = st.selectbox("📌 Studie auswählen", available_studies)
+
+def get_mapping_for_study(mapping_df, study):
+    mapping = {}
+    for _, row in mapping_df.iterrows():
+        meaning = str(row.iloc[0]).strip().lower()
+        if meaning not in MEANING_TO_INTERNAL:
+            continue
+        code = row.get(study)
+        if pd.isna(code):
+            continue
+        mapping[MEANING_TO_INTERNAL[meaning]] = str(code)
+    return mapping
+
+COLUMN_MAP = get_mapping_for_study(mapping_df, selected_study)
+
+# ==========================
+# Uploads
+# ==========================
+
+icf_file = st.file_uploader("ICF-Versionen (xlsx, Sheet 'ICF2')", type=["xlsx", "xls"])
+consent_file = st.file_uploader("Consent-Daten", type=["xlsx", "xls"])
+eos_file = st.file_uploader("EOS-Daten", type=["xlsx", "xls"])
+elig_file = st.file_uploader("Eligibility-Daten", type=["xlsx", "xls"])
+
+# ==========================
+# Helper Loader
+# ==========================
+
+def normalize_columns(df, column_map):
+    rename_dict = {v: k for k, v in column_map.items() if v in df.columns}
+    return df.rename(columns=rename_dict)
 
 def load_icf_versions(file):
     xls = pd.ExcelFile(file)
     sheet = "ICF2" if "ICF2" in xls.sheet_names else xls.sheet_names[0]
     df = pd.read_excel(xls, sheet_name=sheet)
 
-    col_map = {}
-    for c in df.columns:
-        lc = c.lower()
-        if "icf" in lc and "version" in lc:
-            col_map[c] = "ICF Version"
-        if "gültig" in lc or "valid" in lc:
-            col_map[c] = "Gültig ab"
+    df = df.rename(columns={
+        c: "ICF Version" for c in df.columns if "version" in c.lower()
+    })
+    df = df.rename(columns={
+        c: "Gültig ab" for c in df.columns if "gültig" in c.lower() or "valid" in c.lower()
+    })
 
-    df = df.rename(columns=col_map)
     df["Gültig ab"] = pd.to_datetime(df["Gültig ab"], errors="coerce")
-    df = df.sort_values("Gültig ab").reset_index(drop=True)
-
-    return df
-
+    return df.sort_values("Gültig ab").reset_index(drop=True)
 
 def load_consents(file):
-    df = pd.read_excel(file, dtype={"mnpaid": str})
-    df["mnpaid"] = df["mnpaid"].astype(str)
-    df["icdat"] = pd.to_datetime(df["icdat"], errors="coerce")
-
-    if "mnp_rando_gr" not in df.columns:
-        df["mnp_rando_gr"] = ""
-    if "mnp_rando_v6_gr" not in df.columns:
-        df["mnp_rando_v6_gr"] = ""
-
+    df = pd.read_excel(file, dtype=str)
+    df = normalize_columns(df, COLUMN_MAP)
+    df["icdat"] = pd.to_datetime(df.get("icdat"), errors="coerce")
     return df
-
 
 def load_eos(file):
-    df = pd.read_excel(file, dtype={"mnpaid": str})
-    df["eosdat"] = pd.to_datetime(df["eosdat"], errors="coerce")
+    df = pd.read_excel(file, dtype=str)
+    df = normalize_columns(df, COLUMN_MAP)
+    df["eosdat"] = pd.to_datetime(df.get("eosdat"), errors="coerce")
     df["dthdat"] = pd.to_datetime(df.get("dthdat"), errors="coerce")
-    df["mnpaid"] = df["mnpaid"].astype(str)
     return df
-
 
 def load_elig(file):
-    df = pd.read_excel(file, dtype={"mnpaid": str})
-    df["mnpaid"] = df["mnpaid"].astype(str)
-    df["eligyn"] = df["eligyn"].astype(str)
+    df = pd.read_excel(file, dtype=str)
+    df = normalize_columns(df, COLUMN_MAP)
     return df
 
+# ==========================
+# Core Logic
+# ==========================
 
 def find_icf_version(icf_df, date):
     if pd.isna(date):
         return None
-
-    rows = icf_df.reset_index(drop=True)
-    for i, row in rows.iterrows():
-        valid_from = row["Gültig ab"]
-        next_valid = rows.iloc[i+1]["Gültig ab"] if i+1 < len(rows) else None
-
-        if next_valid is None:
-            if date >= valid_from:
-                return row["ICF Version"]
-        else:
-            if valid_from <= date < next_valid:
-                return row["ICF Version"]
-
+    for i, row in icf_df.iterrows():
+        start = row["Gültig ab"]
+        end = icf_df.iloc[i + 1]["Gültig ab"] if i + 1 < len(icf_df) else None
+        if end is None and date >= start:
+            return row["ICF Version"]
+        if start <= date < end:
+            return row["ICF Version"]
     return None
 
-
-
-# --------------------------
-# Report Generator
-# --------------------------
-
 def generate_report(icf_df, consents_df, eos_df, elig_df):
-
-    eos_map = eos_df.set_index("mnpaid")["eosdat"].to_dict()
-    dth_map = eos_df.set_index("mnpaid")["dthdat"].to_dict()
-    elig_map = elig_df.set_index("mnpaid")["eligyn"].to_dict()
+    eos_map = eos_df.set_index("mnpaid").get("eosdat", {}).to_dict()
+    dth_map = eos_df.set_index("mnpaid").get("dthdat", {}).to_dict()
+    elig_map = elig_df.set_index("mnpaid").get("eligyn", {}).to_dict()
 
     rows = []
 
     for pid, group in consents_df.groupby("mnpaid"):
         group = group.sort_values("icdat")
+        elig = elig_map.get(pid, "yes").lower()
 
-        elig = elig_map.get(pid, "Yes").strip().lower()
-
-        # Randomisierung
-        first_row = group.iloc[0]
-        r1 = first_row.get("mnp_rando_gr", "") or "-"
-        r2 = first_row.get("mnp_rando_v6_gr", "") or "-"
+        r1 = group.iloc[0].get("mnp_rando_gr", "-")
+        r2 = group.iloc[0].get("mnp_rando_v6_gr", "-")
         rando_text = f"{r1} / {r2}"
 
-        # EOS / Death
-        eos_date = eos_map.get(pid, pd.NaT)
-        dth_date = dth_map.get(pid, pd.NaT)
+        eos_date = eos_map.get(pid)
+        dth_date = dth_map.get(pid)
 
-        if not pd.isna(dth_date):
+        eos_text = ""
+        if pd.notna(dth_date):
             eos_text = f"EOS (Death, {dth_date.strftime('%d.%m.%Y')})"
-        elif not pd.isna(eos_date):
+        elif pd.notna(eos_date):
             eos_text = f"EOS ({eos_date.strftime('%d.%m.%Y')})"
-        else:
-            eos_text = ""
 
-        # Determine signed versions
-        signed_versions = {}
-        for _, rec in group.iterrows():
-            icdate = rec["icdat"]
-            version = find_icf_version(icf_df, icdate)
-            if version:
-                signed_versions[version] = icdate.strftime("%Y-%m-%d")
+        signed = {}
+        for _, r in group.iterrows():
+            v = find_icf_version(icf_df, r["icdat"])
+            if v:
+                signed[v] = r["icdat"].strftime("%Y-%m-%d")
 
+        comment = "Screening Failure" if elig == "no" else "\n".join(filter(None, [rando_text, eos_text]))
         last_consent = group["icdat"].max()
 
-        # ----------------------------------
-        # SCREENING FAILURE LOGIK
-        # ----------------------------------
-        if elig == "no":
+        for _, icf in icf_df.iterrows():
+            v = icf["ICF Version"]
+            valid_from = icf["Gültig ab"]
 
-            # Comment: ONLY "Screening Failure"
-            comment_block = "Screening Failure"
-
-            # List ALL versions for screening failures (your new requirement)
-            for _, icf_row in icf_df.iterrows():
-                version = icf_row["ICF Version"]
-
-                if version in signed_versions:
-                    date_val = signed_versions[version]
-                else:
-                    date_val = "n.a."
-
-                rows.append({
-                    "Patient-ID": pid,
-                    "Version": version,
-                    "Date": date_val,
-                    "Comment": comment_block
-                })
-
-            continue
-
-        # ----------------------------------
-        # NORMAL PATIENT FLOW
-        # ----------------------------------
-
-        comment_block = "\n".join([x for x in [rando_text, eos_text] if x])
-
-        for _, icf_row in icf_df.iterrows():
-            version = icf_row["ICF Version"]
-            valid_from = icf_row["Gültig ab"]
-
-            if version in signed_versions:
-                rows.append({
-                    "Patient-ID": pid,
-                    "Version": version,
-                    "Date": signed_versions[version],
-                    "Comment": comment_block
-                })
-                continue
-
-            if valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
-                rows.append({
-                    "Patient-ID": pid,
-                    "Version": version,
-                    "Date": "CHECK",
-                    "Comment": comment_block
-                })
-                continue
+            if v in signed:
+                date = signed[v]
+            elif elig != "no" and valid_from > last_consent and (pd.isna(eos_date) or eos_date >= valid_from):
+                date = "CHECK"
+            else:
+                date = "n.a."
 
             rows.append({
                 "Patient-ID": pid,
-                "Version": version,
-                "Date": "n.a.",
-                "Comment": comment_block
+                "Version": v,
+                "Date": date,
+                "Comment": comment
             })
 
-    # Word output
+    # Word
     doc = Document()
-    doc.add_heading("Consent Report", level=1)
-
     table = doc.add_table(rows=1, cols=4)
-    hdr = table.rows[0].cells
-    hdr[0].text = "Patient-ID"
-    hdr[1].text = "Version of Informed Consent Form"
-    hdr[2].text = "Date of Consent"
-    hdr[3].text = "Comment"
+    table.rows[0].cells[:] = [
+        "Patient-ID",
+        "Version of Informed Consent Form",
+        "Date of Consent",
+        "Comment"
+    ]
 
     for r in rows:
-        row_cells = table.add_row().cells
-        row_cells[0].text = r["Patient-ID"]
-        row_cells[1].text = r["Version"]
-        row_cells[2].text = r["Date"]
-        row_cells[3].text = r["Comment"]
+        row = table.add_row().cells
+        row[0].text = r["Patient-ID"]
+        row[1].text = r["Version"]
+        row[2].text = r["Date"]
+        row[3].text = r["Comment"]
 
-
-    # --- Merge cells for Patient-ID and Comment ---
-    # We find row ranges with identical Patient-ID
-    table_rows = table.rows[1:]  # skip header
-    n_rows = len(table_rows)
-    start = 0
-
-    while start < n_rows:
-        current_pid = table_rows[start].cells[0].text
-        end = start + 1
-
-        # find consecutive rows with same Patient-ID
-        while end < n_rows and table_rows[end].cells[0].text == current_pid:
-            end += 1
-
-        # merge Patient-ID column
-        if end - start > 1:
-            merge_range = table_rows[start].cells[0].merge(table_rows[end-1].cells[0])
-            merge_range.text = current_pid  # ensure clean text
-
-            # merge Comment column
-            comment_text = table_rows[start].cells[3].text
-            merge_comment = table_rows[start].cells[3].merge(table_rows[end-1].cells[3])
-            merge_comment.text = comment_text
-
-        start = end
+    # Merge cells
+    tr = table.rows[1:]
+    i = 0
+    while i < len(tr):
+        pid = tr[i].cells[0].text
+        j = i + 1
+        while j < len(tr) and tr[j].cells[0].text == pid:
+            j += 1
+        if j - i > 1:
+            tr[i].cells[0].merge(tr[j - 1].cells[0])
+            tr[i].cells[3].merge(tr[j - 1].cells[3])
+        i = j
 
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)
-    
-
     return bio
 
-
-# --------------------------
-# Button → Report generieren
-# --------------------------
+# ==========================
+# Run
+# ==========================
 
 if icf_file and consent_file and eos_file and elig_file:
     if st.button("📄 Report generieren"):
-        with st.spinner("Erstelle Word-Datei..."):
-            icf_df = load_icf_versions(icf_file)
-            consents_df = load_consents(consent_file)
-            eos_df = load_eos(eos_file)
-            elig_df = load_elig(elig_file)
+        icf_df = load_icf_versions(icf_file)
+        cons_df = load_consents(consent_file)
+        eos_df = load_eos(eos_file)
+        elig_df = load_elig(elig_file)
 
-            word_file = generate_report(icf_df, consents_df, eos_df, elig_df)
+        word = generate_report(icf_df, cons_df, eos_df, elig_df)
 
-        st.success("Fertig!")
         st.download_button(
-            label="⬇️ Word-Datei herunterladen",
-            data=word_file,
+            "⬇️ Word-Datei herunterladen",
+            data=word,
             file_name="consent_report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 else:
-    st.info("Bitte zuerst alle vier Dateien hochladen.")
+    st.info("Bitte Studie auswählen und alle Dateien hochladen.")
